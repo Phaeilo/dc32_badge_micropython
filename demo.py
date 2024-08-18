@@ -278,9 +278,31 @@ class Display(Actor):
         pass
 
 
-def i2c_scan():
-    from machine import I2C
-    i2c = I2C(id=1, scl=Pin(I2C_SCL), sda=Pin(I2C_SDA))
+class Touchscreen(Actor):
+    def __init__(self, i2c):
+        self.i2c = i2c
+
+    def setup(self):
+        self.x = self.y = self.z = 0
+        self.addr = 0x48
+        self.z_thr = 30
+
+    def _read(self, cmd):
+        buff = self.i2c.readfrom_mem(self.addr, cmd, 2)
+        v = (buff[0] << 4) | (buff[1] >> 4)
+        return v
+
+    def tick(self):
+        self.z = self._read(0xe0)
+        if self.z > self.z_thr:
+            self.x = self._read(0xc0)
+            self.y = self._read(0xd0)
+            print(f"touch x={self.x} y={self.y} z={self.z}")
+        else:
+            self.x = self.y = -1
+
+
+def i2c_scan(i2c):
     devices = i2c.scan()
     print(f"found {len(devices)} I2C devices")
     for device in devices:
@@ -290,7 +312,10 @@ def i2c_scan():
 def main():
     print("main() start")
 
-    i2c_scan()
+    from machine import I2C
+    i2c = I2C(id=1, scl=Pin(I2C_SCL), sda=Pin(I2C_SDA))
+
+    i2c_scan(i2c)
 
     blink = Blinkenlights()
     blink.setup()
@@ -304,12 +329,16 @@ def main():
     display = Display()
     display.setup()
 
+    touchscreen = Touchscreen(i2c)
+    touchscreen.setup()
+
     print("main() loop start")
     while True:
         blink.tick()
         buttons.tick()
         beeper.tick()
         display.tick()
+        touchscreen.tick()
 
         if buttons.UP.PRESSED:
             print("UP")
@@ -369,7 +398,21 @@ def main():
             print("FN")
             beeper.beep(415, 1)
             blink.max_red = blink.max_blue = blink.max_green = 10
-            i2c_scan()
+            i2c_scan(i2c)
+
+        elif touchscreen.x != -1:
+            # TODO is this calibration universal?
+            tx = (touchscreen.x - 350) / 3500
+
+            r = randint(0, 255)
+            g = randint(0, 255)
+            b = randint(0, 255)
+            x = int((1-tx) * DISPLAY_HEIGHT)
+            x = max(0, min(DISPLAY_HEIGHT - 32, x))
+            display.clear_rect(128, x, 128+32, x+32, r=r, g=g, b=b)
+
+            f = int(touchscreen.x / 0x1000 * 700 + 100)
+            beeper.beep(f, 1)
 
         sleep(0.1)
 
