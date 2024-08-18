@@ -2,6 +2,7 @@ from micropython import const
 from machine import Pin
 from time import sleep, sleep_ms
 from random import randint
+from struct import unpack
 
 
 # derived from dc32_badge_schematic.pdf
@@ -302,6 +303,75 @@ class Touchscreen(Actor):
             self.x = self.y = -1
 
 
+class Accelerometer(Actor):
+    def __init__(self, i2c):
+        self.i2c = i2c
+
+    def setup(self):
+        self.addr = 0x18
+        self.x = self.y = self.z = self.vbat = self.vbus = self.temp = 0
+        self.orientation = None
+        self.new_orientation = None
+
+        # WHO_AM_I
+        assert self.i2c.readfrom_mem(self.addr, 0x0F, 1) == b"\x33"
+
+        # TEMP_CFG_REG: TEMP_EN + ADC_EN
+        assert self.i2c.writeto(self.addr, b"\x1f\xc0") == 2
+
+        # CTRL_REG1: 25 Hz, normal mode, XYZ-axis
+        assert self.i2c.writeto(self.addr, b"\x20\x37") == 2
+
+        # CTRL_REG4 4G range, block-data-update
+        assert  self.i2c.writeto(self.addr, b"\x23\x90") == 2
+
+    def tick(self):
+        # "In order to read multiple bytes, it is necessary to assert the most significant bit of the subaddress field."
+        buff = self.i2c.readfrom_mem(self.addr, 0x28 | 0x80, 6)
+        buff += self.i2c.readfrom_mem(self.addr, 0x08 | 0x80, 6)
+        self.x, self.y, self.z, self.vbat, self.vbus, self.temp = unpack("<6h", buff)
+        #print(self.x >> 10, self.y >> 10, self.z >> 10)
+
+        o = self.get_orientation()
+        if o != self.orientation:
+            print(o)
+            self.new_orientation = o
+        else:
+            self.new_orientation = None
+        self.orientation = o
+
+    def get_orientation(self):
+        def cl(v):
+            if -2 < v < 2:
+                return 0
+            elif v < -8:
+                return -1
+            elif 8 < v:
+                return 1
+            else:
+                return None
+
+        x = cl(self.x >> 10)
+        y = cl(self.y >> 10)
+        z = cl(self.z >> 10)
+        #print(x, y, z, self.x >> 10, self.y >> 10, self.z >> 10)
+
+        if x == y == 0 and z == -1:
+            return "faceup"
+        elif x == y == 0 and z == 1:
+            return "facedown"
+        elif y == z == 0 and x == -1:
+            return "upright"
+        elif y == z == 0 and x == 1:
+            return "upsidedown"
+        elif y == 1 and x == z == 0:
+            return "right"
+        elif y == -1 and x == z == 0:
+            return "left"
+        else:
+            return None
+
+
 def i2c_scan(i2c):
     devices = i2c.scan()
     print(f"found {len(devices)} I2C devices")
@@ -332,6 +402,9 @@ def main():
     touchscreen = Touchscreen(i2c)
     touchscreen.setup()
 
+    acc = Accelerometer(i2c)
+    acc.setup()
+
     print("main() loop start")
     while True:
         blink.tick()
@@ -339,6 +412,7 @@ def main():
         beeper.tick()
         display.tick()
         touchscreen.tick()
+        acc.tick()
 
         if buttons.UP.PRESSED:
             print("UP")
@@ -413,6 +487,10 @@ def main():
 
             f = int(touchscreen.x / 0x1000 * 700 + 100)
             beeper.beep(f, 1)
+
+        elif acc.new_orientation is not None:
+            print(acc.new_orientation)
+            beeper.beep(777, 1)
 
         sleep(0.1)
 
