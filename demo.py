@@ -1,6 +1,6 @@
 from micropython import const
 from machine import Pin
-from time import sleep
+from time import sleep, sleep_ms
 from random import randint
 
 
@@ -45,6 +45,9 @@ DISPLAY_DI = const(6)
 DISPLAY_SCK = const(8)
 DISPLAY_CS = const(9)
 DISPLAY_BL = const(10)
+# TODO fix rotation with proper MADCTL
+DISPLAY_WIDTH = const(240)
+DISPLAY_HEIGHT = const(320)
 
 # micro SD
 SPI_DO = const(12)
@@ -160,6 +163,121 @@ class Beeper(Actor):
         self.duration = duration
 
 
+class Display(Actor):
+    def setup(self):
+        # TODO somehow the display is not wired correctly for SPI0 :(
+        #from machine import SPI
+        #self.spi = SPI(0, baudrate=10_000_000, bits=8, sck=Pin(DISPLAY_SCK), mosi=Pin(DISPLAY_DI))
+        from machine import SoftSPI
+        self.spi = SoftSPI(baudrate=40_000_000, sck=Pin(DISPLAY_SCK), mosi=Pin(DISPLAY_DI), miso=26)
+        self.cs = Pin(DISPLAY_CS, Pin.OUT, value=1)
+        self.bl = Pin(DISPLAY_BL, Pin.OUT, value=0)
+        self.dc = Pin(DISPLAY_RS, Pin.OUT, value=0)
+
+        # SWRESET
+        self._send_cmd(0x01)
+        sleep_ms(150)
+
+        # SLPOUT
+        self._send_cmd(0x11)
+        sleep_ms(500)
+
+        # COLMOD (16bit/pixel)
+        self._send_cmd(0x3A, b"\x55")
+        sleep_ms(10)
+
+        # MADCTL
+        self._send_cmd(0x36, b"\x00")
+
+        # NORON
+        self._send_cmd(0x13)
+        sleep_ms(10)
+
+        # DISPON
+        self._send_cmd(0x29)
+        sleep_ms(500)
+
+        # backlight on
+        self.bl(1)
+
+        print("disp on")
+
+        self.clear()
+        print("disp cleared")
+
+    @micropython.native
+    def clear(self):
+        c = 8
+        buff = b"\x00\x00" * DISPLAY_WIDTH * c
+        for y in range(0, DISPLAY_HEIGHT, c):
+            self._send_pixels(0, y, DISPLAY_WIDTH - 1, y + c - 1, buff)
+
+    @micropython.native
+    def clear_rect(self, x0, y0, x1, y1, r=0, g=0, b=0):
+        w = x1 - x0
+        h = y1 - y0
+        u = (r & 0xF8) | ((g & 0xE0) >> 5)
+        v = ((g & 0x1C) << 3) | (b >> 3)
+        buff = bytes((u, v)) * w * h
+        self._send_pixels(x0, y0, x1 - 1, y1 - 1, buff)
+
+    def _send_cmd(self, cmd, data=b""):
+        self.cs(0)
+        self.dc(0)
+        self.spi.write(bytes((cmd,)))
+        if len(data) > 0:
+            self.dc(1)
+            self.spi.write(data)
+        self.cs(1)
+
+    @micropython.native
+    def _send_pixels(self, x0, y0, x1, y1, buff):
+        buff1 = bytearray(1)
+        buff4 = bytearray(4)
+        dc = self.dc
+        cs = self.cs
+        spi = self.spi
+
+        cs(0)
+
+        # CASET
+        dc(0)
+        buff1[0] = 0x2A
+        spi.write(buff1)
+
+        dc(1)
+        buff4[0] = x0 >> 8
+        buff4[1] = x0 & 0xFF
+        buff4[2] = x1 >> 8
+        buff4[3] = x1 & 0xFF
+        spi.write(buff4)
+
+        # RASET
+        dc(0)
+        buff1[0] = 0x2B
+        spi.write(buff1)
+
+        dc(1)
+        buff4[0] = y0 >> 8
+        buff4[1] = y0 & 0xFF
+        buff4[2] = y1 >> 8
+        buff4[3] = y1 & 0xFF
+        spi.write(buff4)
+
+        # RAMWR
+        dc(0)
+        buff1[0] = 0x2C
+        spi.write(buff1)
+
+        dc(1)
+        spi.write(buff)
+
+        cs(1)
+
+    def tick(self):
+        pass
+
+
 def i2c_scan():
     from machine import I2C
     i2c = I2C(id=1, scl=Pin(I2C_SCL), sda=Pin(I2C_SDA))
@@ -183,57 +301,69 @@ def main():
     beeper = Beeper()
     beeper.setup()
 
+    display = Display()
+    display.setup()
+
     print("main() loop start")
     while True:
         blink.tick()
         buttons.tick()
         beeper.tick()
+        display.tick()
 
         if buttons.UP.PRESSED:
             print("UP")
             beeper.beep(262, 1)
             blink.max_green = blink.max_blue = 10
             blink.max_red = 255
+            display.clear_rect(8, 8, 8+32, 8+32, r=255)
 
         elif buttons.RIGHT.PRESSED:
             print("RIGHT")
             beeper.beep(277, 1)
             blink.max_red = blink.max_blue = 10
             blink.max_green = 255
+            display.clear_rect(8, 8, 8+32, 8+32, g=255)
 
         elif buttons.DOWN.PRESSED:
             print("DOWN")
             beeper.beep(294, 1)
             blink.max_red = blink.max_green = 10
             blink.max_blue = 255
+            display.clear_rect(8, 8, 8+32, 8+32, b=255)
 
         elif buttons.LEFT.PRESSED:
             print("LEFT")
             beeper.beep(311, 1)
             blink.max_red = 10
             blink.max_blue = blink.max_green = 255
+            display.clear_rect(8, 8, 8+32, 8+32, b=255, g=255)
 
         elif buttons.A.PRESSED:
             print("A")
             beeper.beep(330, 1)
             blink.max_blue = 10
             blink.max_red = blink.max_green = 255
+            display.clear_rect(8, 8, 8+32, 8+32, r=255, g=255)
 
         elif buttons.B.PRESSED:
             print("B")
             beeper.beep(349, 1)
             blink.max_green = 10
             blink.max_red = blink.max_blue = 255
+            display.clear_rect(8, 8, 8+32, 8+32, r=255, b=255)
 
         elif buttons.START.PRESSED:
             print("START")
             beeper.beep(370, 1)
             blink.max_red = blink.max_blue = blink.max_green = 255
+            display.clear_rect(8, 8, 8+32, 8+32, r=255, g=255, b=255)
 
         elif buttons.SELECT.PRESSED:
             print("SELECT")
             beeper.beep(392, 1)
             blink.max_red = blink.max_blue = blink.max_green = 128
+            display.clear_rect(8, 8, 8+32, 8+32, r=128, g=128, b=128)
 
         elif buttons.FN.PRESSED:
             print("FN")
