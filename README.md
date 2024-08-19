@@ -12,7 +12,7 @@ Some example code to drive the hardware of the Defcon 32 badge with MicroPython.
 - [x] Touchscreen
 - [ ] RTC
 - [x] Accelerometer
-- [ ] Voltage sensing
+- [x] Voltage sensing
 - [ ] IrDA
 - [ ] SD card
 

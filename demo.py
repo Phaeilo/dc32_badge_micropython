@@ -331,6 +331,7 @@ class Accelerometer(Actor):
         buff += self.i2c.readfrom_mem(self.addr, 0x08 | 0x80, 6)
         self.x, self.y, self.z, self.vbat, self.vbus, self.temp = unpack("<6h", buff)
         #print(self.x >> 10, self.y >> 10, self.z >> 10)
+        # TODO transform vbat & vbus to useful values
 
         o = self.get_orientation()
         if o != self.orientation:
@@ -350,6 +351,8 @@ class Accelerometer(Actor):
                 return 1
             else:
                 return None
+
+        # this is rather primitive
 
         x = cl(self.x >> 10)
         y = cl(self.y >> 10)
