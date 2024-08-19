@@ -375,6 +375,41 @@ class Accelerometer(Actor):
             return None
 
 
+class RTC(Actor):
+    def __init__(self, i2c):
+        self.i2c = i2c
+
+    def setup(self):
+        self.addr = 0x51
+        self.years = self.months = self.days = self.hours = self.minutes = self.seconds = 0
+        self._upd = 6
+        # TODO actually set the clock to a reasonable time
+
+    def tick(self):
+        self._upd = (self._upd + 1) % 7
+        if self._upd > 0:
+            return
+
+        buff = self.i2c.readfrom_mem(self.addr, 0x02, 7)
+        #print("RTC", buff.hex())
+        vl = buff[0] & 0x80 != 0
+        _seconds = (buff[0] & 0xf) + (((buff[0] & 0x70) >> 4) * 10)
+        if _seconds == self.seconds:
+            return
+        self.seconds = _seconds
+        self.minutes = (buff[1] & 0xf) + (((buff[1] & 0x70) >> 4) * 10)
+        self.hours = (buff[2] & 0xf) + (((buff[2] & 0x30) >> 4) * 10)
+        self.days = (buff[3] & 0xf) + (((buff[3] & 0x30) >> 4) * 10)
+        weekdays = buff[4] & 0x7
+        century = buff[5] & 0x80 != 0
+        self.months = (buff[5] & 0xf) + (((buff[5] & 0x10) >> 4) * 10)
+        self.years = (buff[6] & 0xf) + (((buff[6] & 0xf0) >> 4) * 10)
+        self.years += 100 if century else 0
+        self.years += 2000
+
+        print(f"{self.years:04d}-{self.months:02d}-{self.days:02d}T{self.hours:02d}:{self.minutes:02d}:{self.seconds:02d}")
+
+
 def i2c_scan(i2c):
     devices = i2c.scan()
     print(f"found {len(devices)} I2C devices")
@@ -408,6 +443,9 @@ def main():
     acc = Accelerometer(i2c)
     acc.setup()
 
+    rtc = RTC(i2c)
+    rtc.setup()
+
     print("main() loop start")
     while True:
         blink.tick()
@@ -416,6 +454,7 @@ def main():
         display.tick()
         touchscreen.tick()
         acc.tick()
+        rtc.tick()
 
         if buttons.UP.PRESSED:
             print("UP")
@@ -494,6 +533,9 @@ def main():
         elif acc.new_orientation is not None:
             print(acc.new_orientation)
             beeper.beep(777, 1)
+
+        elif rtc.seconds == 0:
+            beeper.beep(555, 1)
 
         sleep(0.1)
 
